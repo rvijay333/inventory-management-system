@@ -1,0 +1,16 @@
+{
+  "name": "Inventory Management System",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:18",
+
+  "features": {
+    "ghcr.io/devcontainers/features/dotnet:1": {
+      "version": "latest"
+    }
+  },
+
+  "postCreateCommand": "cd IVS_FrontEnd/inventory-angular && npm install && cd ../../IVS_BackEnd && dotnet tool install --global dotnet-ef && dotnet ef database update",
+
+  "postStartCommand": "cd IVS_BackEnd && dotnet run & cd ../IVS_FrontEnd/inventory-angular && npm start",
+
+  "forwardPorts": [4200, 5059]
+}

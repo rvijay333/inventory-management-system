@@ -1,0 +1,528 @@
+================================================================================
+INVENTORY MANAGEMENT SYSTEM - COMPLETE CODEBASE
+Date: March 25, 2026
+Status: Fully reverted to original working state (in-memory only, no database)
+================================================================================
+
+================================================================================
+BACKEND - C# .NET 9.0 Minimal API
+================================================================================
+
+--- Program.cs ---
+using InventoryManagementSystem;
+
+var builder = WebApplication.CreateBuilder(args);
+
+
+builder.Services.AddScoped<InventoryService>();
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
+
+builder.Services.AddCors(options => {
+    options.AddPolicy("AllowAngular", policy => {
+        policy.WithOrigins("http://localhost:4200")
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
+
+
+
+var app = builder.Build();
+
+app.UseSwagger();
+app.UseSwaggerUI();
+app.UseCors("AllowAll");
+app.UseCors("AllowAngular");
+
+
+app.MapGet("/api/products", (InventoryService service, string? search) => {
+    string searchTerm = search ?? "";
+    List<Product> products = service.GetAllProducts(searchTerm);
+    return Results.Ok(products);
+});
+
+// if a GET request comes at url: /api/products/5 , then do a function ,
+//at has parameters InventoryService service and int id (which will be 5 in this example)
+
+// when the frontend calls GET /api/products/5, this code will run
+// the function takes an InventoryService (which is automatically provided by dependency injection) and an int id (which comes from the URL)
+app.MapGet("/api/products/{id}", (InventoryService service, int id) =>
+{
+    Product? product = service.GetProductById(id);
+    if (product == null)
+        return Results.NotFound("Product with Id " + id + " was not found.");
+    return Results.Ok(product);
+});
+
+app.MapPost("/api/products", (InventoryService service, Product newProduct) =>
+{
+    if (string.IsNullOrEmpty(newProduct.Name) || string.IsNullOrEmpty(newProduct.Sku))
+        return Results.BadRequest("Product Name and SKU are required.");
+
+    Product created = service.AddProduct(newProduct);
+    return Results.Created("/api/products/" + created.Id, created);
+});
+
+app.MapPut("/api/products/{id}", (InventoryService service, int id, Product updatedProduct) =>
+{
+    bool success = service.UpdateProduct(id, updatedProduct);
+    if (!success)
+        return Results.NotFound("Product with Id " + id + " was not found.");
+
+    Product? updated = service.GetProductById(id);
+    return Results.Ok(updated);
+});
+
+app.MapDelete("/api/products/{id}", (InventoryService service, int id) =>
+{
+    bool success = service.DeleteProduct(id);
+    if (!success)
+        return Results.NotFound("Product with Id " + id + " was not found.");
+
+    return Results.NoContent();
+});
+
+app.MapPost("/api/products/{id}/stock", (InventoryService service, int id, StockUpdateRequest request) =>
+{
+    if (request.Type != "In" && request.Type != "Out")
+        return Results.BadRequest("Type must be 'In' or 'Out'.");
+
+    if (request.Quantity < 1)
+        return Results.BadRequest("Quantity must be at least 1.");
+
+    string result = service.UpdateStock(id, request.Type, request.Quantity, request.Note ?? "");
+
+    if (result.StartsWith("Error"))
+        return Results.BadRequest(result);
+
+    Product? updated = service.GetProductById(id);
+    return Results.Ok(updated);
+});
+
+
+app.MapGet("/api/alerts", (InventoryService service) =>
+{
+    List<Product> alerts = service.GetAlerts();
+    return Results.Ok(alerts);
+});
+
+
+app.MapGet("/api/history", (InventoryService service) =>
+{
+    List<StockMovement> history = service.GetHistory();
+    return Results.Ok(history);
+});
+
+
+app.MapDelete("/api/history", (InventoryService service) =>
+{
+    service.ClearHistory();
+    return Results.Ok("History cleared.");
+});
+
+
+
+
+app.Run();
+
+
+namespace InventoryManagementSystem
+{
+    public class StockUpdateRequest
+    {
+        public string Type { get; set; } = "";
+        public int Quantity { get; set; }
+        public string? Note { get; set; }
+    }
+}
+
+--- InventoryService.cs ---
+namespace InventoryManagementSystem;
+
+public class InventoryService
+{
+
+    private List<Product> products = new List<Product>();
+    private List<StockMovement> movements = new List<StockMovement>();
+
+    // This counter gives each new product a unique Id automatically
+    private int nextProductId = 1;
+
+    // This counter gives each new movement a unique Id automatically
+    private int nextMovementId = 1;
+
+
+    public InventoryService()
+    {
+        // Add some sample products to start with
+        products.Add(new Product { Id = nextProductId++, Name = "Arduino Uno R3",    Sku = "ARD-001",  Category = "Electronics", Quantity = 45, Threshold = 10, Price = 850  });
+        products.Add(new Product { Id = nextProductId++, Name = "Raspberry Pi 4B",   Sku = "RPI-004",  Category = "Electronics", Quantity = 6,  Threshold = 8,  Price = 4500 });
+        products.Add(new Product { Id = nextProductId++, Name = "USB-C Cable 2m",    Sku = "CAB-USB2", Category = "Accessories", Quantity = 0,  Threshold = 15, Price = 299  });
+        products.Add(new Product { Id = nextProductId++, Name = "Soldering Iron Kit",Sku = "TOOL-SI1", Category = "Tools",       Quantity = 3,  Threshold = 5,  Price = 750  });
+        products.Add(new Product { Id = nextProductId++, Name = "Multimeter Pro",    Sku = "TOOL-MM1", Category = "Tools",       Quantity = 12, Threshold = 4,  Price = 1800 });
+        products.Add(new Product { Id = nextProductId++, Name = "Jumper Wire Set",   Sku = "JMP-SET",  Category = "Electronics", Quantity = 55, Threshold = 20, Price = 89   });
+    }
+
+    public List<Product> GetAllProducts(string search = "")
+    {
+        if (string.IsNullOrEmpty(search))
+        {
+            return products;
+        }
+
+        List<Product> results = new List<Product>();
+
+        foreach (Product p in products)
+        {
+            bool nameMatches = p.Name.ToLower().Contains(search.ToLower());
+            bool skuMatches  = p.Sku.ToLower().Contains(search.ToLower());
+
+            if (nameMatches || skuMatches)
+            {
+                results.Add(p);
+            }
+        }
+
+        return results;
+    }
+
+    public Product? GetProductById(int id)
+    {
+        foreach (Product p in products)
+        {
+            if (p.Id == id)
+            {
+                return p;
+            }
+        }
+
+        return null;
+    }
+
+    public Product AddProduct(Product newProduct)
+    {
+        newProduct.Id = nextProductId;
+        nextProductId++;
+        products.Add(newProduct);
+        return newProduct;
+    }
+
+    public bool UpdateProduct(int id, Product updatedData)
+    {
+        Product? existing = GetProductById(id);
+
+        if (existing == null)
+        {
+            return false;
+        }
+
+        existing.Name      = updatedData.Name;
+        existing.Sku       = updatedData.Sku;
+        existing.Category  = updatedData.Category;
+        existing.Threshold = updatedData.Threshold;
+        existing.Price     = updatedData.Price;
+
+        return true;
+    }
+
+    public bool DeleteProduct(int id)
+    {
+        Product? existing = GetProductById(id);
+
+        if (existing == null)
+        {
+            return false;
+        }
+
+        products.Remove(existing);
+        return true;
+    }
+
+    public string UpdateStock(int productId, string type, int quantity, string note)
+    {
+        Product? product = GetProductById(productId);
+
+        if (product == null)
+        {
+            return "Error: Product not found.";
+        }
+
+        if (type == "Out" && quantity > product.Quantity)
+        {
+            return "Error: Cannot remove " + quantity + " units. Only " + product.Quantity + " in stock.";
+        }
+
+        int quantityBefore = product.Quantity;
+
+        if (type == "In")
+        {
+            product.Quantity += quantity;
+        }
+        else
+        {
+            product.Quantity -= quantity;
+        }
+
+        StockMovement movement = new StockMovement
+        {
+            Id             = nextMovementId,
+            ProductId      = productId,
+            ProductName    = product.Name,
+            Type           = type,
+            Quantity       = quantity,
+            QuantityBefore = quantityBefore,
+            QuantityAfter  = product.Quantity,
+            Note           = note,
+            Date           = DateTime.Now
+        };
+
+        nextMovementId++;
+        movements.Add(movement);
+
+        return "Success";
+    }
+
+    public List<Product> GetAlerts()
+    {
+        List<Product> alerts = new List<Product>();
+
+        foreach (Product p in products)
+        {
+            if (p.Status == "Low Stock" || p.Status == "Out of Stock")
+            {
+                alerts.Add(p);
+            }
+        }
+
+        return alerts;
+    }
+
+    public List<StockMovement> GetHistory()
+    {
+        List<StockMovement> history = new List<StockMovement>(movements);
+        history.Reverse();
+        return history;
+    }
+
+    public void ClearHistory()
+    {
+        movements.Clear();
+    }
+}
+
+--- Models.cs ---
+namespace InventoryManagementSystem;
+public class Product
+{
+    public int Id { get; set; }                 // Unique number for each product (1, 2, 3...)
+    public string Name { get; set; } = "";      // Name of the product e.g. "Arduino Uno"
+    public string Sku { get; set; } = "";       // Short code e.g. "ARD-001"
+    public string Category { get; set; } = "";  // e.g. "Electronics"
+    public int Quantity { get; set; }           // How many are in stock right now
+    public int Threshold { get; set; } = 10;    // When quantity goes below this → low stock alert
+    public decimal Price { get; set; }          // Price per unit
+
+
+    public string Status
+    {
+        get
+        {
+            if (Quantity == 0)
+                return "Out of Stock";
+            else if (Quantity <= Threshold)
+                return "Low Stock";
+            else
+                return "In Stock";
+        }
+    }
+}
+
+
+
+
+public class StockMovement
+{
+    public int Id { get; set; }                        // Unique number for this movement
+    public int ProductId { get; set; }                 // Which product this movement belongs to
+    public string ProductName { get; set; } = "";      // Product name (stored for easy display)
+    public string Type { get; set; } = "";             // "In" or "Out"
+    public int Quantity { get; set; }                  // How many units moved
+    public int QuantityBefore { get; set; }            // Stock level before this movement
+    public int QuantityAfter { get; set; }             // Stock level after this movement
+    public string Note { get; set; } = "";             // Optional note e.g. "Received from supplier"
+    public DateTime Date { get; set; } = DateTime.Now; // When this happened
+}
+
+--- InventoryManagementSystem.csproj ---
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.14" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.5" />
+  </ItemGroup>
+
+</Project>
+
+--- appsettings.json ---
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+================================================================================
+FRONTEND - Angular 17
+================================================================================
+
+--- inventory.service.ts ---
+import { Injectable } from '@angular/core';
+import { HttpClient, HttpParams } from '@angular/common/http';
+import { Observable } from 'rxjs';
+import { Product, ProductForm, StockUpdate, HistoryEntry } from '../models/inventory.models';
+
+@Injectable({
+  providedIn: 'root'
+})
+export class InventoryService {
+
+
+  private API = 'http://localhost:5059';
+
+  constructor(private http: HttpClient) {}
+
+  getProducts(search: string = ''): Observable<Product[]> {
+    let params = new HttpParams();
+    if (search) params = params.set('search', search);
+    return this.http.get<Product[]>(`${this.API}/api/products`, { params });
+  }
+
+  getProduct(id: number): Observable<Product> {
+    return this.http.get<Product>(`${this.API}/api/products/${id}`);
+  }
+
+  createProduct(product: ProductForm): Observable<Product> {
+    return this.http.post<Product>(`${this.API}/api/products`, product);
+  }
+
+  updateProduct(id: number, product: ProductForm): Observable<Product> {
+    return this.http.put<Product>(`${this.API}/api/products/${id}`, product);
+  }
+
+  deleteProduct(id: number): Observable<void> {
+    return this.http.delete<void>(`${this.API}/api/products/${id}`);
+  }
+
+  updateStock(productId: number, update: StockUpdate): Observable<void> {
+    return this.http.post<void>(
+      `${this.API}/api/products/${productId}/stock`, update
+    );
+  }
+
+  getAlerts(): Observable<Product[]> {
+    return this.http.get<Product[]>(`${this.API}/api/alerts`);
+  }
+
+  getHistory(): Observable<HistoryEntry[]> {
+    return this.http.get<HistoryEntry[]>(`${this.API}/api/history`);
+  }
+
+  clearHistory(): Observable<void> {
+    return this.http.delete<void>(`${this.API}/api/history`);
+  }
+}
+
+--- inventory.models.ts ---
+export interface Product {
+  id: number;
+  name: string;
+  sku: string;
+  category: string;
+  price: number;
+  quantity: number;
+  threshold: number;
+  status: 'In Stock' | 'Low Stock' | 'Out of Stock';
+}
+
+export interface ProductForm {
+  name: string;
+  sku: string;
+  category: string;
+  price: number;
+  quantity: number;
+  threshold: number;
+}
+
+export interface StockUpdate {
+  type: 'In' | 'Out';
+  quantity: number;
+  note: string;
+}
+
+export interface HistoryEntry {
+  id: number;
+  productName: string;
+  type: 'In' | 'Out';
+  quantity: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  note: string;
+  date: string;
+}
+
+export interface Stats {
+  total: number;
+  inStock: number;
+  low: number;
+  out: number;
+}
+
+================================================================================
+HOW TO RUN THE APPLICATION
+================================================================================
+
+1. Start Backend:
+   cd IVS_BackEnd
+   dotnet run --urls "http://localhost:5059"
+
+2. Start Frontend (in new terminal):
+   cd IVS_FrontEnd\inventory-angular
+   npm start
+
+3. Open browser:
+   http://localhost:4200
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+If port conflicts occur:
+- Kill processes: taskkill /IM "node.exe" /F & taskkill /IM "dotnet.exe" /F
+- Or find PID: netstat -ano | findstr :4200 (or :5059)
+- Kill specific: taskkill /PID <PID> /F
+
+================================================================================
+END OF CODEBASE
+================================================================================

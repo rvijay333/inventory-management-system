@@ -1,0 +1,1548 @@
+================================================================================
+INVENTORY MANAGEMENT SYSTEM - ALL CORRECTED CODES
+================================================================================
+Project: IVS (Inventory Management System)
+Backend: C# .NET 9.0
+Frontend: Angular 21 + TypeScript 5.9
+Date Created: March 24, 2026
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. BACKEND (C#)
+   - Program.cs
+   - Models.cs
+   - InventoryService.cs
+
+2. FRONTEND (Angular TypeScript)
+   - package.json (with zone.js fix)
+   - src/index.html
+   - src/main.ts
+   - src/app/app.config.ts
+   - src/app/app.ts
+   - src/app/app.html
+   - src/app/app.css
+   - src/styles.css
+   - src/app/models/inventory.models.ts
+   - src/app/services/inventory.service.ts
+
+================================================================================
+BACKEND FILES
+================================================================================
+
+================================================================================
+FILE: IVS_BackEnd/Program.cs
+================================================================================
+// ============================================================
+// FILE: Program.cs
+// ============================================================
+
+using InventoryManagementSystem;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Register InventoryService — one instance for the whole app
+builder.Services.AddSingleton<InventoryService>();
+
+// Enable Swagger (the API testing page)
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Enable CORS — lets our HTML file talk to this API
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
+
+builder.Services.AddCors(options => {
+    options.AddPolicy("AllowAngular", policy => {
+        policy.WithOrigins("http://localhost:4200")
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
+
+
+
+var app = builder.Build();
+
+app.UseSwagger();
+app.UseSwaggerUI();
+app.UseCors("AllowAll");
+app.UseCors("AllowAngular");
+
+// ── ENDPOINT 1: GET ALL PRODUCTS ──────────────────────────────
+app.MapGet("/api/products", (InventoryService service, string? search) =>
+{
+    string searchTerm = search ?? "";
+    List<Product> products = service.GetAllProducts(searchTerm);
+    return Results.Ok(products);
+});
+
+// ── ENDPOINT 2: GET ONE PRODUCT ───────────────────────────────
+app.MapGet("/api/products/{id}", (InventoryService service, int id) =>
+{
+    Product? product = service.GetProductById(id);
+    if (product == null)
+        return Results.NotFound("Product with Id " + id + " was not found.");
+    return Results.Ok(product);
+});
+
+// ── ENDPOINT 3: ADD A NEW PRODUCT ─────────────────────────────
+app.MapPost("/api/products", (InventoryService service, Product newProduct) =>
+{
+    if (string.IsNullOrEmpty(newProduct.Name) || string.IsNullOrEmpty(newProduct.Sku))
+        return Results.BadRequest("Product Name and SKU are required.");
+
+    Product created = service.AddProduct(newProduct);
+    return Results.Created("/api/products/" + created.Id, created);
+});
+
+// ── ENDPOINT 4: UPDATE A PRODUCT ──────────────────────────────
+app.MapPut("/api/products/{id}", (InventoryService service, int id, Product updatedProduct) =>
+{
+    bool success = service.UpdateProduct(id, updatedProduct);
+    if (!success)
+        return Results.NotFound("Product with Id " + id + " was not found.");
+
+    Product? updated = service.GetProductById(id);
+    return Results.Ok(updated);
+});
+
+// ── ENDPOINT 5: DELETE A PRODUCT ──────────────────────────────
+app.MapDelete("/api/products/{id}", (InventoryService service, int id) =>
+{
+    bool success = service.DeleteProduct(id);
+    if (!success)
+        return Results.NotFound("Product with Id " + id + " was not found.");
+
+    return Results.NoContent();
+});
+
+// ── ENDPOINT 6: UPDATE STOCK (IN or OUT) ──────────────────────
+app.MapPost("/api/products/{id}/stock", (InventoryService service, int id, StockUpdateRequest request) =>
+{
+    if (request.Type != "In" && request.Type != "Out")
+        return Results.BadRequest("Type must be 'In' or 'Out'.");
+
+    if (request.Quantity < 1)
+        return Results.BadRequest("Quantity must be at least 1.");
+
+    string result = service.UpdateStock(id, request.Type, request.Quantity, request.Note ?? "");
+
+    if (result.StartsWith("Error"))
+        return Results.BadRequest(result);
+
+    Product? updated = service.GetProductById(id);
+    return Results.Ok(updated);
+});
+
+// ── ENDPOINT 7: GET ALERTS ────────────────────────────────────
+app.MapGet("/api/alerts", (InventoryService service) =>
+{
+    List<Product> alerts = service.GetAlerts();
+    return Results.Ok(alerts);
+});
+
+// ── ENDPOINT 8: GET MOVEMENT HISTORY ─────────────────────────
+app.MapGet("/api/history", (InventoryService service) =>
+{
+    List<StockMovement> history = service.GetHistory();
+    return Results.Ok(history);
+});
+
+// ── ENDPOINT 9: CLEAR HISTORY ─────────────────────────────────
+// URL:    DELETE /api/history
+// DOES:   Wipes all stock movement records
+// CALLED: When the user clicks "Clear History"
+app.MapDelete("/api/history", (InventoryService service) =>
+{
+    service.ClearHistory();
+    return Results.Ok("History cleared.");
+});
+
+
+// Start the app — this line must come before any class definitions
+app.Run();
+
+// ── HELPER CLASS ──────────────────────────────────────────────
+// Defines the shape of the JSON body for the stock update endpoint
+namespace InventoryManagementSystem
+{
+    public class StockUpdateRequest
+    {
+        public string Type { get; set; } = "";
+        public int Quantity { get; set; }
+        public string? Note { get; set; }
+    }
+}
+
+
+================================================================================
+FILE: IVS_BackEnd/Models.cs
+================================================================================
+namespace InventoryManagementSystem;
+public class Product
+{
+    public int Id { get; set; }                 // Unique number for each product (1, 2, 3...)
+    public string Name { get; set; } = "";      // Name of the product e.g. "Arduino Uno"
+    public string Sku { get; set; } = "";       // Short code e.g. "ARD-001"
+    public string Category { get; set; } = "";  // e.g. "Electronics"
+    public int Quantity { get; set; }           // How many are in stock right now
+    public int Threshold { get; set; } = 10;    // When quantity goes below this → low stock alert
+    public decimal Price { get; set; }          // Price per unit
+
+   
+    public string Status
+    {
+        get
+        {
+            if (Quantity == 0)
+                return "Out of Stock";
+            else if (Quantity <= Threshold)
+                return "Low Stock";
+            else
+                return "In Stock";
+        }
+    }
+}
+
+// ----------------------------------------------------------
+// This is the StockMovement class.
+// Every time stock goes IN or OUT, we save one of these.
+// It is our history / audit trail.
+// Like a bank statement — every transaction is recorded.
+// ----------------------------------------------------------
+public class StockMovement
+{
+    public int Id { get; set; }                        // Unique number for this movement
+    public int ProductId { get; set; }                 // Which product this movement belongs to
+    public string ProductName { get; set; } = "";      // Product name (stored for easy display)
+    public string Type { get; set; } = "";             // "In" or "Out"
+    public int Quantity { get; set; }                  // How many units moved
+    public int QuantityBefore { get; set; }            // Stock level before this movement
+    public int QuantityAfter { get; set; }             // Stock level after this movement
+    public string Note { get; set; } = "";             // Optional note e.g. "Received from supplier"
+    public DateTime Date { get; set; } = DateTime.Now; // When this happened
+}
+
+
+================================================================================
+FILE: IVS_BackEnd/InventoryService.cs
+================================================================================
+namespace InventoryManagementSystem;
+
+public class InventoryService
+{
+    
+    private List<Product> products = new List<Product>();
+    private List<StockMovement> movements = new List<StockMovement>();
+
+    // This counter gives each new product a unique Id automatically
+    private int nextProductId = 1;
+
+    // This counter gives each new movement a unique Id automatically
+    private int nextMovementId = 1;
+
+   
+    public InventoryService()
+    {
+        // Add some sample products to start with
+        products.Add(new Product { Id = nextProductId++, Name = "Arduino Uno R3",    Sku = "ARD-001",  Category = "Electronics", Quantity = 45, Threshold = 10, Price = 850  });
+        products.Add(new Product { Id = nextProductId++, Name = "Raspberry Pi 4B",   Sku = "RPI-004",  Category = "Electronics", Quantity = 6,  Threshold = 8,  Price = 4500 });
+        products.Add(new Product { Id = nextProductId++, Name = "USB-C Cable 2m",    Sku = "CAB-USB2", Category = "Accessories", Quantity = 0,  Threshold = 15, Price = 299  });
+        products.Add(new Product { Id = nextProductId++, Name = "Soldering Iron Kit",Sku = "TOOL-SI1", Category = "Tools",       Quantity = 3,  Threshold = 5,  Price = 750  });
+        products.Add(new Product { Id = nextProductId++, Name = "Multimeter Pro",    Sku = "TOOL-MM1", Category = "Tools",       Quantity = 12, Threshold = 4,  Price = 1800 });
+        products.Add(new Product { Id = nextProductId++, Name = "Jumper Wire Set",   Sku = "JMP-SET",  Category = "Electronics", Quantity = 55, Threshold = 20, Price = 89   });
+    }
+
+    
+    public List<Product> GetAllProducts(string search = "")
+    {
+        // If no search term was given, return everything
+        if (string.IsNullOrEmpty(search))
+        {
+            return products;
+        }
+
+        // Otherwise, filter the list
+        // ToLower() makes the search case-insensitive
+        List<Product> results = new List<Product>();
+
+        foreach (Product p in products)
+        {
+            bool nameMatches = p.Name.ToLower().Contains(search.ToLower());
+            bool skuMatches  = p.Sku.ToLower().Contains(search.ToLower());
+
+            if (nameMatches || skuMatches)
+            {
+                results.Add(p);
+            }
+        }
+
+        return results;
+    }
+
+    
+    
+    public Product? GetProductById(int id)
+    {
+        foreach (Product p in products)
+        {
+            if (p.Id == id)
+            {
+                return p;
+            }
+        }
+
+        // No product found with that Id
+        return null;
+    }
+
+   
+    public Product AddProduct(Product newProduct)
+    {
+        // Assign the next available Id
+        newProduct.Id = nextProductId;
+
+        // Increment the counter so the next product gets a different Id
+        nextProductId = nextProductId + 1;
+
+        // Add to our list
+        products.Add(newProduct);
+
+        return newProduct;
+    }
+
+   
+   
+    public bool UpdateProduct(int id, Product updatedData)
+    {
+        // Find the product in the list
+        Product? existing = GetProductById(id);
+
+        if (existing == null)
+        {
+            return false; // Product not found
+        }
+
+        // Update the fields
+        existing.Name      = updatedData.Name;
+        existing.Sku       = updatedData.Sku;
+        existing.Category  = updatedData.Category;
+        existing.Threshold = updatedData.Threshold;
+        existing.Price     = updatedData.Price;
+
+        return true; // Update was successful
+    }
+
+   
+    public bool DeleteProduct(int id)
+    {
+        Product? existing = GetProductById(id);
+
+        if (existing == null)
+        {
+            return false; // Not found
+        }
+
+        products.Remove(existing);
+        return true;
+    }
+
+   
+    public string UpdateStock(int productId, string type, int quantity, string note)
+    {
+        // Step 1: Find the product
+        Product? product = GetProductById(productId);
+
+        if (product == null)
+        {
+            return "Error: Product not found.";
+        }
+
+        // Step 2: Business rule check
+        // You cannot take out more than what is currently in stock
+        if (type == "Out" && quantity > product.Quantity)
+        {
+            return "Error: Cannot remove " + quantity + " units. Only " + product.Quantity + " in stock.";
+        }
+
+        // Step 3: Remember the quantity before the change (for the history record)
+        int quantityBefore = product.Quantity;
+
+        // Step 4: Apply the stock change
+        if (type == "In")
+        {
+            product.Quantity = product.Quantity + quantity;
+        }
+        else
+        {
+            product.Quantity = product.Quantity - quantity;
+        }
+
+        // Step 5: Create a movement record for the history
+        StockMovement movement = new StockMovement
+        {
+            Id             = nextMovementId,
+            ProductId      = productId,
+            ProductName    = product.Name,
+            Type           = type,
+            Quantity       = quantity,
+            QuantityBefore = quantityBefore,
+            QuantityAfter  = product.Quantity,
+            Note           = note,
+            Date           = DateTime.Now
+        };
+
+        nextMovementId = nextMovementId + 1;
+
+        movements.Add(movement);
+
+        return "Success";
+    }
+
+    
+    public List<Product> GetAlerts()
+    {
+        List<Product> alerts = new List<Product>();
+
+        foreach (Product p in products)
+        {
+            if (p.Status == "Low Stock" || p.Status == "Out of Stock")
+            {
+                alerts.Add(p);
+            }
+        }
+
+        return alerts;
+    }
+
+    
+    public List<StockMovement> GetHistory()
+    {
+        // Create a copy of the list, then reverse it
+        List<StockMovement> history = new List<StockMovement>(movements);
+        history.Reverse();
+        return history;
+    }
+
+
+    
+    public void ClearHistory()
+    {
+        movements.Clear();
+    }
+}
+
+
+================================================================================
+FRONTEND FILES
+================================================================================
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/package.json
+================================================================================
+{
+  "name": "inventory-angular",
+  "version": "0.0.0",
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve",
+    "build": "ng build",
+    "watch": "ng build --watch --configuration development",
+    "test": "ng test"
+  },
+  "private": true,
+  "packageManager": "npm@11.12.0",
+  "dependencies": {
+    "@angular/common": "^21.2.0",
+    "@angular/compiler": "^21.2.0",
+    "@angular/core": "^21.2.0",
+    "@angular/forms": "^21.2.0",
+    "@angular/platform-browser": "^21.2.0",
+    "@angular/router": "^21.2.0",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@angular/build": "^21.2.3",
+    "@angular/cli": "^21.2.3",
+    "@angular/compiler-cli": "^21.2.0",
+    "jsdom": "^28.0.0",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2",
+    "vitest": "^4.0.8"
+  }
+}
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/index.html
+================================================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Inventory Management</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <app-root></app-root>
+</body>
+</html>
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/main.ts
+================================================================================
+// Zone.js is required for Angular's change detection
+import 'zone.js';
+
+// This is the entry point of the Angular app.
+// It bootstraps (starts) the AppComponent and provides HttpClient
+// so our service can make API calls to the C# backend.
+
+import { bootstrapApplication } from '@angular/platform-browser';
+import { appConfig } from './app/app.config';
+import { AppComponent } from './app/app';
+
+bootstrapApplication(AppComponent, appConfig)
+  .catch(err => {
+    console.error('Bootstrap failed:', err);
+    // Display error on page so user knows something is wrong
+    const errorHtml = `
+      <div style="background: #333; color: #fff; padding: 30px; font-family: monospace; white-space: pre-wrap;">
+        <h2 style="color: #ff6b6b; margin-top: 0;">⚠️ Application Bootstrap Error</h2>
+        <p><strong>Error:</strong> ${err.message}</p>
+        <pre style="color: #aaa; font-size: 12px; overflow: auto; max-height: 300px;">${err.stack || 'No stack trace'}</pre>
+        <p style="margin-top: 20px; font-size: 12px; color: #999;">Check browser console (F12) for more details.</p>
+      </div>
+    `;
+    document.body.innerHTML = errorHtml;
+    document.body.style.margin = '0';
+    document.body.style.background = '#1a1a1a';
+  });
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/app/app.config.ts
+================================================================================
+// app.config.ts
+// This file configures the Angular application.
+// provideHttpClient() makes Angular's HTTP service available
+// throughout the app so our inventory service can call the C# API.
+
+import { ApplicationConfig, provideZoneChangeDetection } from '@angular/core';
+import { provideHttpClient } from '@angular/common/http';
+
+export const appConfig: ApplicationConfig = {
+  providers: [
+    provideZoneChangeDetection({ eventCoalescing: true }),
+    provideHttpClient()
+  ]
+};
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/app/app.ts
+================================================================================
+// app.ts  (Angular 21 names this app.ts instead of app.component.ts)
+//
+// This is the ROOT COMPONENT — the heart of the app.
+// It holds all the data (products, alerts, history) and all the logic
+// (open modal, save product, delete, etc.)
+//
+// In your original code this was inventory.js — a flat list of functions.
+// In Angular it becomes a CLASS with:
+//   - Properties  = variables (products, stats, showModal...)
+//   - Methods     = functions (loadProducts, saveProduct, deleteProduct...)
+//   - ngOnInit    = runs once on page load (replaces the calls at bottom of inventory.js)
+
+import { Component, OnInit } from '@angular/core';
+import { CommonModule } from '@angular/common';   // gives us *ngIf, *ngFor, | date, | number
+import { FormsModule } from '@angular/forms';     // gives us [(ngModel)] two-way binding
+
+import { InventoryService } from './services/inventory.service';
+import { Product, ProductForm, StockUpdate, HistoryEntry, Stats } from './models/inventory.models';
+
+@Component({
+  selector: 'app-root',         // matches <app-root> in index.html
+  standalone: true,             // no separate NgModule needed (Angular 17+)
+  imports: [CommonModule, FormsModule],
+  templateUrl: './app.html',    // the HTML template
+  styleUrl: './app.css'         // component-scoped CSS
+})
+export class AppComponent implements OnInit {
+
+  // ── DATA ──────────────────────────────────────────────────────
+  // These replace the plain JS variables. Angular watches these —
+  // when they change, the HTML updates automatically.
+
+  products: Product[] = [];       // rows in the products table
+  alerts:   Product[] = [];       // items in the alerts card
+  history:  HistoryEntry[] = [];  // rows in the history table
+
+  stats: Stats = { total: 0, inStock: 0, low: 0, out: 0 };
+
+  searchTerm: string = '';        // bound to the search input
+
+  activeTab: 'products' | 'history' = 'products';
+
+  // ── MODAL FLAGS ───────────────────────────────────────────────
+  // Instead of classList.add('open'), we use simple true/false flags.
+  // The template shows/hides modals based on these.
+
+  showProductModal = false;
+  showStockModal   = false;
+  isEditing        = false;
+  editingId: number | null = null;
+
+  // ── FORM DATA ─────────────────────────────────────────────────
+  // These objects are two-way bound to the modal form inputs via [(ngModel)].
+  // When you type in a field, the object updates. When you reset the object,
+  // the fields clear. No more document.getElementById('f-name').value!
+
+  productForm: ProductForm = {
+    name: '', sku: '', category: '',
+    price: 0, quantity: 0, threshold: 10
+  };
+
+  stockForm: StockUpdate = { type: 'In', quantity: 1, note: '' };
+  stockProductId:   number | null = null;
+  stockProductName: string = '';
+
+  // ── CONSTRUCTOR ───────────────────────────────────────────────
+  // Angular reads the parameter type (InventoryService) and automatically
+  // injects the right object. We never call "new InventoryService()" ourselves.
+
+  constructor(private inventoryService: InventoryService) {}
+
+  // ── ngOnInit ──────────────────────────────────────────────────
+  // Runs once when the page first loads.
+  // Replaces the loadProducts() and loadAlerts() calls at the
+  // bottom of your original inventory.js file.
+
+  ngOnInit(): void {
+    this.loadProducts();
+    this.loadAlerts();
+  }
+
+  // ── LOAD PRODUCTS ─────────────────────────────────────────────
+  // .subscribe() is like .then() — it runs when the API responds.
+  // "next" = success, "error" = something went wrong.
+
+  loadProducts(): void {
+    this.inventoryService.getProducts(this.searchTerm).subscribe({
+      next: (products) => {
+        this.products = products;
+        this.updateStats(products);
+      },
+      error: (err) => console.error('Failed to load products', err)
+    });
+  }
+
+  // ── UPDATE STATS ──────────────────────────────────────────────
+  updateStats(products: Product[]): void {
+    this.stats = {
+      total:   products.length,
+      inStock: products.filter(p => p.status === 'In Stock').length,
+      low:     products.filter(p => p.status === 'Low Stock').length,
+      out:     products.filter(p => p.status === 'Out of Stock').length
+    };
+  }
+
+  // ── LOAD ALERTS ───────────────────────────────────────────────
+  loadAlerts(): void {
+    this.inventoryService.getAlerts().subscribe({
+      next: (alerts) => this.alerts = alerts,
+      error: (err)   => console.error('Failed to load alerts', err)
+    });
+  }
+
+  // ── LOAD HISTORY ──────────────────────────────────────────────
+  loadHistory(): void {
+    this.inventoryService.getHistory().subscribe({
+      next: (history) => this.history = history,
+      error: (err)    => console.error('Failed to load history', err)
+    });
+  }
+
+  // ── TAB SWITCHING ─────────────────────────────────────────────
+  showTab(tab: 'products' | 'history'): void {
+    this.activeTab = tab;
+    if (tab === 'history') this.loadHistory();
+  }
+
+  // ── OPEN ADD MODAL ────────────────────────────────────────────
+  openAddModal(): void {
+    this.isEditing = false;
+    this.editingId = null;
+    this.productForm = { name: '', sku: '', category: '', price: 0, quantity: 0, threshold: 10 };
+    this.showProductModal = true;
+  }
+
+  // ── OPEN EDIT MODAL ───────────────────────────────────────────
+  openEditModal(id: number): void {
+    this.inventoryService.getProduct(id).subscribe({
+      next: (p) => {
+        this.isEditing = true;
+        this.editingId = id;
+        this.productForm = {
+          name: p.name, sku: p.sku, category: p.category,
+          price: p.price, quantity: p.quantity, threshold: p.threshold
+        };
+        this.showProductModal = true;
+      }
+    });
+  }
+
+  // ── SAVE PRODUCT ──────────────────────────────────────────────
+  saveProduct(): void {
+    const call = this.isEditing && this.editingId !== null
+      ? this.inventoryService.updateProduct(this.editingId, this.productForm)
+      : this.inventoryService.createProduct(this.productForm);
+
+    call.subscribe({
+      next: () => {
+        this.showProductModal = false;
+        this.loadProducts();
+        this.loadAlerts();
+      },
+      error: (err) => alert('Error saving product: ' + err.message)
+    });
+  }
+
+  // ── DELETE PRODUCT ────────────────────────────────────────────
+  deleteProduct(id: number, name: string): void {
+    if (!confirm(`Are you sure you want to delete '${name}'?`)) return;
+    this.inventoryService.deleteProduct(id).subscribe({
+      next: () => { this.loadProducts(); this.loadAlerts(); },
+      error: ()  => alert('Could not delete product.')
+    });
+  }
+
+  // ── OPEN STOCK MODAL ──────────────────────────────────────────
+  openStockModal(id: number, name: string): void {
+    this.stockProductId   = id;
+    this.stockProductName = name;
+    this.stockForm = { type: 'In', quantity: 1, note: '' };
+    this.showStockModal   = true;
+  }
+
+  // ── SAVE STOCK ────────────────────────────────────────────────
+  saveStock(): void {
+    if (this.stockProductId === null) return;
+    this.inventoryService.updateStock(this.stockProductId, this.stockForm).subscribe({
+      next: () => {
+        this.showStockModal = false;
+        this.loadProducts();
+        this.loadAlerts();
+      },
+      error: (err) => alert('Error updating stock: ' + err.message)
+    });
+  }
+
+  // ── CLEAR HISTORY ─────────────────────────────────────────────
+  clearHistory(): void {
+    if (!confirm('Clear all stock history? This cannot be undone.')) return;
+    this.inventoryService.clearHistory().subscribe({
+      next: () => this.loadHistory(),
+      error: ()  => alert('Could not clear history.')
+    });
+  }
+
+  // ── HELPER: get badge CSS class from status string ────────────
+  badgeClass(status: string): string {
+    if (status === 'Low Stock')    return 'badge-orange';
+    if (status === 'Out of Stock') return 'badge-red';
+    return 'badge-green';
+  }
+}
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/app/app.html
+================================================================================
+<!-- app.html — the Angular template
+     
+     Angular template syntax quick reference:
+       {{ value }}              → show a variable's value
+       *ngIf="condition"        → show/hide element based on condition
+       *ngFor="let x of list"   → repeat element for each item in list
+       (click)="method()"       → call method when clicked
+       [(ngModel)]="variable"   → two-way bind input to a variable
+       [class.name]="condition" → add CSS class when condition is true
+       [ngClass]="expression"   → set class dynamically
+       value | pipe             → transform a value (date, number, etc.)
+-->
+
+<!-- ══ TOPBAR ══════════════════════════════════════════════════ -->
+<div class="topbar">
+  <h1>📦 Inventory Management</h1>
+  <span>Angular + C# Demo</span>
+</div>
+
+<div class="page">
+
+  <!-- ══ STAT BOXES ══════════════════════════════════════════════
+       {{ stats.total }} reads the stats object from app.ts
+       Each number updates automatically when loadProducts() runs
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="stats">
+    <div class="stat-box blue">
+      <div class="number">{{ stats.total }}</div>
+      <div class="label">Total Products</div>
+    </div>
+    <div class="stat-box green">
+      <div class="number">{{ stats.inStock }}</div>
+      <div class="label">In Stock</div>
+    </div>
+    <div class="stat-box orange">
+      <div class="number">{{ stats.low }}</div>
+      <div class="label">Low Stock</div>
+    </div>
+    <div class="stat-box red">
+      <div class="number">{{ stats.out }}</div>
+      <div class="label">Out of Stock</div>
+    </div>
+  </div>
+
+  <!-- ══ ALERTS ══════════════════════════════════════════════════
+       *ngIf shows one block or the other based on alerts.length
+       *ngFor loops through each alert and creates one div per alert
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <h2>⚠️ Stock Alerts</h2>
+
+    <p *ngIf="alerts.length === 0" class="no-alerts">
+      ✅ All products are sufficiently stocked.
+    </p>
+
+    <ng-container *ngIf="alerts.length > 0">
+      <div
+        *ngFor="let alert of alerts"
+        class="alert-item"
+        [class.alert-out]="alert.status === 'Out of Stock'"
+        [class.alert-low]="alert.status === 'Low Stock'"
+      >
+        <ng-container *ngIf="alert.status === 'Out of Stock'">
+          ❌ <strong>OUT OF STOCK:</strong> {{ alert.name }} ({{ alert.sku }}) — 0 units remaining.
+        </ng-container>
+        <ng-container *ngIf="alert.status === 'Low Stock'">
+          ⚠️ <strong>LOW STOCK:</strong> {{ alert.name }} ({{ alert.sku }})
+          — only {{ alert.quantity }} units left (threshold: {{ alert.threshold }}).
+        </ng-container>
+      </div>
+    </ng-container>
+  </div>
+
+  <!-- ══ TABS ════════════════════════════════════════════════════
+       [class.active] adds the 'active' CSS class when the condition is true
+       (click) calls showTab() when the div is clicked
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="tabs">
+    <div class="tab" [class.active]="activeTab === 'products'" (click)="showTab('products')">
+      Products
+    </div>
+    <div class="tab" [class.active]="activeTab === 'history'" (click)="showTab('history')">
+      Stock History
+    </div>
+  </div>
+
+  <!-- ══ PRODUCTS TAB ════════════════════════════════════════════ -->
+  <div class="tab-content" [class.active]="activeTab === 'products'">
+    <div class="card">
+      <h2>Product List</h2>
+
+      <div class="toolbar">
+        <!-- [(ngModel)] keeps searchTerm in sync with what you type
+             (input) calls loadProducts() on every keystroke -->
+        <input
+          type="text"
+          placeholder="Search by name or SKU..."
+          [(ngModel)]="searchTerm"
+          (input)="loadProducts()"
+        />
+        <button class="btn-primary" (click)="openAddModal()">+ Add Product</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>SKU</th><th>Category</th><th>Quantity</th>
+            <th>Threshold</th><th>Price (₹)</th><th>Status</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <!-- Empty state -->
+          <tr *ngIf="products.length === 0" class="empty-row">
+            <td colspan="8">No products found.</td>
+          </tr>
+
+          <!-- *ngFor creates one <tr> for each product in the array -->
+          <tr *ngFor="let p of products">
+            <td>{{ p.name }}</td>
+            <td>{{ p.sku }}</td>
+            <td>{{ p.category }}</td>
+            <td>{{ p.quantity }}</td>
+            <td>{{ p.threshold }}</td>
+            <!-- | number:'1.0-0' is an Angular pipe that adds comma formatting -->
+            <td>₹{{ p.price | number:'1.0-0' }}</td>
+            <td>
+              <!-- [ngClass] sets the badge colour by calling badgeClass() in app.ts -->
+              <span class="badge" [ngClass]="badgeClass(p.status)">{{ p.status }}</span>
+            </td>
+            <td>
+              <button class="btn-warning btn-small" (click)="openStockModal(p.id, p.name)">Stock</button>
+              <button class="btn-primary btn-small" (click)="openEditModal(p.id)">Edit</button>
+              <button class="btn-danger  btn-small" (click)="deleteProduct(p.id, p.name)">Delete</button>
+            </td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══ HISTORY TAB ══════════════════════════════════════════════ -->
+  <div class="tab-content" [class.active]="activeTab === 'history'">
+    <div class="card">
+      <div class="history-header">
+        <h2>Stock Movement History</h2>
+        <button class="btn-danger" (click)="clearHistory()">Clear History</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th><th>Product</th><th>Type</th>
+            <th>Qty Changed</th><th>Before</th><th>After</th><th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <tr *ngIf="history.length === 0" class="empty-row">
+            <td colspan="7">No stock movements yet.</td>
+          </tr>
+
+          <tr *ngFor="let h of history">
+            <!-- | date:'medium' formats the date string into a readable format -->
+            <td>{{ h.date | date:'medium' }}</td>
+            <td>{{ h.productName }}</td>
+            <td>
+              <span *ngIf="h.type === 'In'"  class="in-text">▲ In</span>
+              <span *ngIf="h.type === 'Out'" class="out-text">▼ Out</span>
+            </td>
+            <td>{{ h.quantity }}</td>
+            <td>{{ h.quantityBefore }}</td>
+            <td>{{ h.quantityAfter }}</td>
+            <td>{{ h.note || '—' }}</td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- end .page -->
+
+
+<!-- ══ MODAL: ADD / EDIT PRODUCT ═══════════════════════════════════
+     [class.open] shows the modal when showProductModal is true
+     [(ngModel)] binds each input directly to productForm fields
+════════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" [class.open]="showProductModal">
+  <div class="modal">
+
+    <h3>{{ isEditing ? 'Edit Product' : 'Add Product' }}</h3>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Product Name</label>
+        <input type="text" [(ngModel)]="productForm.name" placeholder="e.g. Arduino Uno" />
+      </div>
+      <div class="form-group">
+        <label>SKU</label>
+        <input type="text" [(ngModel)]="productForm.sku" placeholder="e.g. ARD-001" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Category</label>
+        <input type="text" [(ngModel)]="productForm.category" placeholder="e.g. Electronics" />
+      </div>
+      <div class="form-group">
+        <label>Price (₹)</label>
+        <input type="number" [(ngModel)]="productForm.price" placeholder="0" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Quantity</label>
+        <input type="number" [(ngModel)]="productForm.quantity" placeholder="0" />
+      </div>
+      <div class="form-group">
+        <label>Low Stock Threshold</label>
+        <input type="number" [(ngModel)]="productForm.threshold" placeholder="10" />
+      </div>
+    </div>
+
+    <div class="modal-buttons">
+      <button class="btn-ghost"   (click)="showProductModal = false">Cancel</button>
+      <button class="btn-primary" (click)="saveProduct()">Save</button>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ══ MODAL: STOCK UPDATE ══════════════════════════════════════════ -->
+<div class="modal-overlay" [class.open]="showStockModal">
+  <div class="modal">
+
+    <h3>Update Stock — {{ stockProductName }}</h3>
+
+    <div class="form-group">
+      <label>Type</label>
+      <select [(ngModel)]="stockForm.type">
+        <option value="In">Stock In (Add)</option>
+        <option value="Out">Stock Out (Remove)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Quantity</label>
+      <input type="number" [(ngModel)]="stockForm.quantity" min="1" />
+    </div>
+
+    <div class="form-group">
+      <label>Note (optional)</label>
+      <input type="text" [(ngModel)]="stockForm.note" placeholder="e.g. Received from supplier" />
+    </div>
+
+    <div class="modal-buttons">
+      <button class="btn-ghost"   (click)="showStockModal = false">Cancel</button>
+      <button class="btn-success" (click)="saveStock()">Confirm</button>
+    </div>
+
+  </div>
+</div>
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/app/app.css
+================================================================================
+/* app.css
+   Component-scoped styles for the root component.
+   These only apply inside app.html — Angular scopes them automatically.
+   All shared/global styles live in src/styles.css
+*/
+
+/* Ensure app root is visible and takes up available space */
+:host {
+  display: contents;
+}
+
+/* Small spacing between the three action buttons in each table row */
+td button + button {
+  margin-left: 4px;
+}
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/styles.css
+================================================================================
+/* You can add global styles to this file, and also import other style files */
+/* ═══════════════════════════════════════════════════════════════
+   GLOBAL STYLES  —  inventory-angular
+   These apply to the whole app.
+═══════════════════════════════════════════════════════════════ */
+
+/* ── CSS VARIABLES ──────────────────────────────────────────────
+   Define colours once here — change here, updates everywhere.
+────────────────────────────────────────────────────────────── */
+:root {
+  --navy:      #1a2332;
+  --accent:    #00c896;
+  --blue:      #2980b9;
+  --green:     #27ae60;
+  --orange:    #e67e22;
+  --red:       #e74c3c;
+  --bg:        #f0f2f5;
+  --white:     #ffffff;
+  --border:    #dde3ea;
+  --text:      #1a2332;
+  --text-muted:#6b7a8d;
+  --radius:    8px;
+  --shadow:    0 2px 12px rgba(26,35,50,0.08);
+}
+
+/* ── RESET ───────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── BASE ────────────────────────────────────────────────────── */
+html, body {
+  display: block;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 15px;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+/* ── LAYOUT ──────────────────────────────────────────────────── */
+.page { max-width: 1140px; margin: 28px auto; padding: 0 20px; }
+
+/* ── TOPBAR ──────────────────────────────────────────────────── */
+.topbar {
+  background: var(--navy);
+  color: white;
+  padding: 16px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 3px solid var(--accent);
+}
+.topbar h1 {
+  font-size: 19px;
+  font-weight: 600;
+  font-family: 'IBM Plex Mono', monospace;
+}
+.topbar span { font-size: 12px; opacity: 0.55; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* ── CARD ────────────────────────────────────────────────────── */
+.card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow);
+}
+.card h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--navy);
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 10px;
+  margin-bottom: 18px;
+}
+
+/* ── STAT BOXES ──────────────────────────────────────────────── */
+.stats { display: flex; gap: 16px; margin-bottom: 24px; }
+.stat-box {
+  flex: 1;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: center;
+  box-shadow: var(--shadow);
+  position: relative;
+  overflow: hidden;
+}
+.stat-box::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+}
+.stat-box.blue::before   { background: var(--blue); }
+.stat-box.green::before  { background: var(--green); }
+.stat-box.orange::before { background: var(--orange); }
+.stat-box.red::before    { background: var(--red); }
+
+.stat-box .number {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 36px;
+  font-weight: 600;
+  line-height: 1;
+}
+.stat-box.blue   .number { color: var(--blue); }
+.stat-box.green  .number { color: var(--green); }
+.stat-box.orange .number { color: var(--orange); }
+.stat-box.red    .number { color: var(--red); }
+.stat-box .label { font-size: 12px; color: var(--text-muted); margin-top: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+/* ── ALERTS ──────────────────────────────────────────────────── */
+.alert-item { padding: 10px 16px; border-radius: 6px; margin-bottom: 8px; font-size: 14px; }
+.alert-out  { background: #fde8e8; border-left: 4px solid var(--red);    color: #c0392b; }
+.alert-low  { background: #fef9e7; border-left: 4px solid var(--orange); color: #b7770d; }
+.no-alerts  { color: var(--green); font-size: 14px; }
+
+/* ── TOOLBAR ─────────────────────────────────────────────────── */
+.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
+.toolbar input {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  width: 260px;
+  transition: border-color 0.2s;
+}
+.toolbar input:focus { outline: none; border-color: var(--accent); }
+
+/* ── BUTTONS ─────────────────────────────────────────────────── */
+button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+button:hover  { opacity: 0.88; }
+button:active { transform: scale(0.97); }
+.btn-primary  { background: var(--blue);   color: white; }
+.btn-success  { background: var(--green);  color: white; }
+.btn-danger   { background: var(--red);    color: white; }
+.btn-warning  { background: var(--orange); color: white; }
+.btn-ghost    { background: #eef0f4;       color: var(--text); }
+.btn-small    { padding: 4px 10px; font-size: 12px; }
+
+/* ── TABLE ───────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th {
+  background: var(--navy);
+  color: white;
+  padding: 11px 14px;
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+thead th:first-child { border-radius: 6px 0 0 0; }
+thead th:last-child  { border-radius: 0 6px 0 0; }
+tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: #f6f8fb; }
+tbody td { padding: 11px 14px; }
+td button + button { margin-left: 4px; }
+
+/* ── BADGES ──────────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.badge-green  { background: #d5f5e3; color: #1e8449; }
+.badge-orange { background: #fef9e7; color: #b7770d; }
+.badge-red    { background: #fde8e8; color: #c0392b; }
+
+/* ── TABS ────────────────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); }
+.tab {
+  padding: 10px 24px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-bottom: none;
+  transition: all 0.15s;
+  user-select: none;
+}
+.tab:hover { color: var(--text); background: #eef0f4; }
+.tab.active {
+  background: var(--white);
+  color: var(--navy);
+  border-color: var(--border);
+  border-bottom-color: var(--white);
+  margin-bottom: -2px;
+}
+.tab-content { display: none; padding-top: 0; }
+.tab-content.active { display: block; }
+
+/* ── MODAL ───────────────────────────────────────────────────── */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(26,35,50,0.55);
+  justify-content: center;
+  align-items: center;
+  z-index: 200;
+  backdrop-filter: blur(2px);
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--white);
+  border-radius: 12px;
+  padding: 28px;
+  width: 440px;
+  max-width: 95vw;
+  box-shadow: 0 20px 60px rgba(26,35,50,0.2);
+  animation: modalIn 0.2s ease;
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.modal h3 { font-size: 17px; font-weight: 600; color: var(--navy); margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+
+/* ── FORM ────────────────────────────────────────────────────── */
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 5px; }
+.form-group input,
+.form-group select {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: 'IBM Plex Sans', sans-serif;
+  color: var(--text);
+  transition: border-color 0.2s;
+}
+.form-group input:focus,
+.form-group select:focus { outline: none; border-color: var(--accent); }
+.form-row { display: flex; gap: 14px; }
+.form-row .form-group { flex: 1; }
+.modal-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+/* ── HISTORY ─────────────────────────────────────────────────── */
+.in-text  { color: var(--green); font-weight: 700; font-family: 'IBM Plex Mono', monospace; }
+.out-text { color: var(--red);   font-weight: 700; font-family: 'IBM Plex Mono', monospace; }
+.history-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+.history-header h2 { border: none; margin: 0; padding: 0; }
+
+/* ── EMPTY STATE ─────────────────────────────────────────────── */
+.empty-row td { text-align: center; color: var(--text-muted); padding: 32px !important; font-size: 14px; }
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/app/models/inventory.models.ts
+================================================================================
+// models/inventory.models.ts
+// TypeScript "interfaces" define the SHAPE of our data objects.
+// Think of them as blueprints — they tell TypeScript exactly
+// what fields each object has and what type each field is.
+// This catches mistakes early: if you typo "quatity" instead of
+// "quantity", TypeScript will warn you immediately.
+
+// A Product — matches exactly what the C# API returns
+export interface Product {
+  id: number;
+  name: string;
+  sku: string;
+  category: string;
+  price: number;
+  quantity: number;
+  threshold: number;
+  status: 'In Stock' | 'Low Stock' | 'Out of Stock';
+}
+
+// Used when creating or editing (no id needed for new products)
+export interface ProductForm {
+  name: string;
+  sku: string;
+  category: string;
+  price: number;
+  quantity: number;
+  threshold: number;
+}
+
+// Sent to the API when doing Stock In or Stock Out
+export interface StockUpdate {
+  type: 'In' | 'Out';
+  quantity: number;
+  note: string;
+}
+
+// One row in the Stock Movement History table
+export interface HistoryEntry {
+  id: number;
+  productName: string;
+  type: 'In' | 'Out';
+  quantity: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  note: string;
+  date: string;
+}
+
+// The four numbers shown in the stat boxes at the top
+export interface Stats {
+  total: number;
+  inStock: number;
+  low: number;
+  out: number;
+}
+
+
+================================================================================
+FILE: IVS_FrontEnd/inventory-angular/src/app/services/inventory.service.ts
+================================================================================
+// services/inventory.service.ts
+//
+// A "Service" in Angular is a class that handles data and API calls.
+// It replaces all the fetch() calls from your original inventory.js.
+//
+// Instead of fetch(), Angular uses HttpClient which returns "Observables".
+// Observables are similar to Promises — they represent a future value.
+// You use .subscribe() to get the result when it arrives.
+//
+// @Injectable({ providedIn: 'root' }) means Angular creates ONE shared
+// instance of this service and makes it available to any component that needs it.
+
+import { Injectable } from '@angular/core';
+import { HttpClient, HttpParams } from '@angular/common/http';
+import { Observable } from 'rxjs';
+import { Product, ProductForm, StockUpdate, HistoryEntry } from '../models/inventory.models';
+
+@Injectable({
+  providedIn: 'root'
+})
+export class InventoryService {
+
+  // Same base URL as in your original inventory.js
+  private API = 'http://localhost:5059';
+
+  // Angular automatically provides HttpClient here — we don't create it manually
+  constructor(private http: HttpClient) {}
+
+  // ── PRODUCTS ──────────────────────────────────────────────────
+
+  // Replaces: fetch(API + '/api/products?search=' + search)
+  getProducts(search: string = ''): Observable<Product[]> {
+    let params = new HttpParams();
+    if (search) params = params.set('search', search);
+    return this.http.get<Product[]>(`${this.API}/api/products`, { params });
+  }
+
+  // Replaces: fetch(API + '/api/products/' + id)
+  getProduct(id: number): Observable<Product> {
+    return this.http.get<Product>(`${this.API}/api/products/${id}`);
+  }
+
+  // Replaces: fetch(url, { method: 'POST', body: JSON.stringify(product) })
+  createProduct(product: ProductForm): Observable<Product> {
+    return this.http.post<Product>(`${this.API}/api/products`, product);
+  }
+
+  // Replaces: fetch(url, { method: 'PUT', body: JSON.stringify(product) })
+  updateProduct(id: number, product: ProductForm): Observable<Product> {
+    return this.http.put<Product>(`${this.API}/api/products/${id}`, product);
+  }
+
+  // Replaces: fetch(url, { method: 'DELETE' })
+  deleteProduct(id: number): Observable<void> {
+    return this.http.delete<void>(`${this.API}/api/products/${id}`);
+  }
+
+  // ── STOCK ─────────────────────────────────────────────────────
+
+  updateStock(productId: number, update: StockUpdate): Observable<void> {
+    return this.http.post<void>(
+      `${this.API}/api/products/${productId}/stock`, update
+    );
+  }
+
+  // ── ALERTS ────────────────────────────────────────────────────
+
+  getAlerts(): Observable<Product[]> {
+    return this.http.get<Product[]>(`${this.API}/api/alerts`);
+  }
+
+  // ── HISTORY ───────────────────────────────────────────────────
+
+  getHistory(): Observable<HistoryEntry[]> {
+    return this.http.get<HistoryEntry[]>(`${this.API}/api/history`);
+  }
+
+  clearHistory(): Observable<void> {
+    return this.http.delete<void>(`${this.API}/api/history`);
+  }
+}
+
+
+================================================================================
+KEY FIXES APPLIED TO THE PROJECT
+================================================================================
+
+1. ZONE.JS DEPENDENCY (Critical Fix)
+   - Added "zone.js": "~0.15.0" to package.json dependencies
+   - Added import 'zone.js'; to src/main.ts
+   - This fixed the NG0908: Angular requires Zone.js error
+
+2. CSS VISIBILITY FIX
+   - Added html, body { display: block; width: 100%; height: 100%; }
+   - Added :host { display: contents; } to app.css
+   - Ensures all HTML elements are visible
+
+3. ERROR HANDLING
+   - Added bootstrap error handling in main.ts
+   - Displays bootstrap errors on page for debugging
+
+4. CORS CONFIGURATION
+   - Backend configured with two CORS policies
+   - "AllowAll" for development
+   - "AllowAngular" for localhost:4200
+
+5. BACKEND API ENDPOINTS
+   - 9 fully functional RESTful endpoints
+   - GET /api/products (with search)
+   - GET /api/products/{id}
+   - POST /api/products (add)
+   - PUT /api/products/{id} (update)
+   - DELETE /api/products/{id}
+   - POST /api/products/{id}/stock (update stock)
+   - GET /api/alerts
+   - GET /api/history
+   - DELETE /api/history (clear history)
+
+6. ANGULAR 21 COMPATIBILITY
+   - Standalone components (no NgModule needed)
+   - Angular 21.2.0 with TypeScript 5.9.2
+   - Proper dependency injection
+   - Observable-based HTTP calls
+
+================================================================================
+HOW TO RUN THE PROJECT
+================================================================================
+
+BACKEND:
+1. Navigate to: C:\IVS\InventoryManagementSystem\IVS_BackEnd
+2. Run: dotnet run
+3. API available at: http://localhost:5059
+4. Swagger UI: http://localhost:5059/swagger/index.html
+
+FRONTEND:
+1. Navigate to: C:\IVS\InventoryManagementSystem\IVS_FrontEnd\inventory-angular
+2. Run: npm install (if needed)
+3. Run: npm start
+4. App available at: http://localhost:4200
+
+================================================================================
+END OF FILE
+================================================================================

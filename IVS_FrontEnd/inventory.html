@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Inventory Management</title>
+  <link rel="stylesheet" href="inventory.css">
+
+  <!--
+    STYLING
+    We are using very basic CSS here.
+    Everything is plain white background, simple table, clear buttons.
+    No fancy frameworks — just standard HTML and CSS.
+  -->
+
+</head>
+<body>
+
+  <!-- ── TOP BAR ─────────────────────────────────────────── -->
+  <div class="topbar">
+    <h1 style="text-align: center;">📦 Inventory Management</h1>
+  </div>
+
+  <div class="page">
+
+    <!-- ── STAT BOXES ──────────────────────────────────────── -->
+    <div class="stats">
+      <div class="stat-box blue">
+        <div class="number" id="stat-total">0</div>
+        <div class="label">Total Products</div>
+      </div>
+      <div class="stat-box green">
+        <div class="number" id="stat-instock">0</div>
+        <div class="label">In Stock</div>
+      </div>
+      <div class="stat-box orange">
+        <div class="number" id="stat-low">0</div>
+        <div class="label">Low Stock</div>
+      </div>
+      <div class="stat-box red">
+        <div class="number" id="stat-out">0</div>
+        <div class="label">Out of Stock</div>
+      </div>
+    </div>
+
+    <!-- ── ALERTS ──────────────────────────────────────────── -->
+    <div class="card">
+      <h2>⚠️ Stock Alerts</h2>
+      <div id="alerts-box">Loading alerts...</div>
+    </div>
+
+    <!-- ── TABS ────────────────────────────────────────────── -->
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('products')">Products</div>
+      <div class="tab"        onclick="showTab('history')">Stock History</div>
+    </div>
+
+    <!-- ── PRODUCTS TAB ────────────────────────────────────── -->
+    <div id="tab-products" class="tab-content active">
+      <div class="card">
+        <h2>Product List</h2>
+
+        <!-- Search and Add button -->
+        <div class="toolbar">
+          <input
+            type="text"
+            id="search-input"
+            placeholder="Search by name or SKU..."
+            oninput="loadProducts()"
+          />
+          <button class="btn-primary" onclick="openAddModal()">+ Add Product</button>
+        </div>
+
+        <!-- The product table -->
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>SKU</th>
+              <th>Category</th>
+              <th>Quantity</th>
+              <th>Threshold</th>
+              <th>Price (₹)</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="product-table-body">
+            <!-- Rows are added here by JavaScript -->
+          </tbody>
+        </table>
+
+      </div>
+    </div>
+
+    <!-- ── HISTORY TAB ──────────────────────────────────────── -->
+    <div id="tab-history" class="tab-content">
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+            <h2 style="margin:0; border:none;">Stock Movement History</h2>
+            <button class="btn-danger" onclick="clearHistory()">Clear History</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Product</th>
+              <th>Type</th>
+              <th>Qty Changed</th>
+              <th>Before</th>
+              <th>After</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body">
+            <!-- Rows added by JavaScript -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- end .page -->
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       MODAL: ADD / EDIT PRODUCT
+       This popup appears when you click "Add Product" or "Edit"
+  ════════════════════════════════════════════════════════════ -->
+  <div class="modal-overlay" id="product-modal">
+    <div class="modal">
+      <h3 id="modal-title">Add Product</h3>
+
+      <!-- Hidden field to store the Id when editing -->
+      <input type="hidden" id="edit-id" />
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Product Name</label>
+          <input type="text" id="f-name" placeholder="e.g. Arduino Uno" />
+        </div>
+        <div class="form-group">
+          <label>SKU</label>
+          <input type="text" id="f-sku" placeholder="e.g. ARD-001" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Category</label>
+          <input type="text" id="f-category" placeholder="e.g. Electronics" />
+        </div>
+        <div class="form-group">
+          <label>Price (₹)</label>
+          <input type="number" id="f-price" placeholder="0" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Quantity</label>
+          <input type="number" id="f-qty" placeholder="0" />
+        </div>
+        <div class="form-group">
+          <label>Low Stock Threshold</label>
+          <input type="number" id="f-threshold" placeholder="10" />
+        </div>
+      </div>
+
+      <div class="modal-buttons">
+        <button onclick="closeModal('product-modal')">Cancel</button>
+        <button class="btn-primary" onclick="saveProduct()">Save</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════
+       MODAL: STOCK UPDATE (In / Out)
+  ════════════════════════════════════════════════════════════ -->
+  <div class="modal-overlay" id="stock-modal">
+    <div class="modal">
+      <h3 id="stock-modal-title">Update Stock</h3>
+
+      <input type="hidden" id="stock-product-id" />
+
+      <div class="form-group">
+        <label>Type</label>
+        <select id="s-type">
+          <option value="In">Stock In (Add)</option>
+          <option value="Out">Stock Out (Remove)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Quantity</label>
+        <input type="number" id="s-qty" value="1" min="1" />
+      </div>
+
+      <div class="form-group">
+        <label>Note (optional)</label>
+        <input type="text" id="s-note" placeholder="e.g. Received from supplier" />
+      </div>
+
+      <div class="modal-buttons">
+        <button onclick="closeModal('stock-modal')">Cancel</button>
+        <button class="btn-success" onclick="saveStock()">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+<script src="inventory.js"></script>
+
+</body>
+</html>

@@ -19,7 +19,7 @@ import { Product, ProductForm, StockUpdate, HistoryEntry } from '../models/inven
 export class InventoryService {
 
 
-  private API = 'http://localhost:5059';
+private API = window.location.origin.replace('4200', '5059');  private API = 'http://localhost:5059';
 
   constructor(private http: HttpClient) {} // dependency injection of HttpClient.
 

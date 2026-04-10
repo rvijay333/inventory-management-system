@@ -1,0 +1,255 @@
+
+<!-- ══ TOPBAR ══════════════════════════════════════════════════ -->
+<div class="topbar">
+  <h1>📦 Inventory Management</h1>
+  <span></span>
+</div>
+
+<div class="page">
+
+  <!-- ══ STAT BOXES ══════════════════════════════════════════════
+       {{ stats.total }} reads the stats object from app.ts
+       Each number updates automatically when loadProducts() runs
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="stats">
+    <div class="stat-box blue">
+      <div class="number">{{ stats.total }}</div>
+      <div class="label">Total Products</div>
+    </div>
+    <div class="stat-box green">
+      <div class="number">{{ stats.inStock }}</div>
+      <div class="label">In Stock</div>
+    </div>
+    <div class="stat-box orange">
+      <div class="number">{{ stats.low }}</div>
+      <div class="label">Low Stock</div>
+    </div>
+    <div class="stat-box red">
+      <div class="number">{{ stats.out }}</div>
+      <div class="label">Out of Stock</div>
+    </div>
+  </div>
+
+  <!-- ══ ALERTS ══════════════════════════════════════════════════
+       *ngIf shows one block or the other based on alerts.length
+       *ngFor loops through each alert and creates one div per alert
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="card">
+    <h2>⚠️ Stock Alerts</h2>
+
+    <p *ngIf="alerts.length === 0" class="no-alerts">
+      ✅ All products are sufficiently stocked.
+    </p>
+
+    <ng-container *ngIf="alerts.length > 0">
+      <div
+        *ngFor="let alert of alerts"
+        class="alert-item"
+        [class.alert-out]="alert.status === 'Out of Stock'"
+        [class.alert-low]="alert.status === 'Low Stock'"
+      >
+        <ng-container *ngIf="alert.status === 'Out of Stock'">
+          ❌ <strong>OUT OF STOCK:</strong> {{ alert.name }} ({{ alert.sku }}) — 0 units remaining.
+        </ng-container>
+        <ng-container *ngIf="alert.status === 'Low Stock'">
+          ⚠️ <strong>LOW STOCK:</strong> {{ alert.name }} ({{ alert.sku }})
+          — only {{ alert.quantity }} units left (threshold: {{ alert.threshold }}).
+        </ng-container>
+      </div>
+    </ng-container>
+  </div>
+
+  <!-- ══ TABS ════════════════════════════════════════════════════
+       [class.active] adds the 'active' CSS class when the condition is true
+       (click) calls showTab() when the div is clicked
+  ══════════════════════════════════════════════════════════════ -->
+  <div class="tabs">
+    <div class="tab" [class.active]="activeTab === 'products'" (click)="showTab('products')">
+      Products
+    </div>
+    <div class="tab" [class.active]="activeTab === 'history'" (click)="showTab('history')">
+      Stock History
+    </div>
+  </div>
+
+  <!-- ══ PRODUCTS TAB ════════════════════════════════════════════ -->
+  <div class="tab-content" [class.active]="activeTab === 'products'">
+    <div class="card">
+      <h2>Product List</h2>
+
+      <div class="toolbar">
+        <!-- [(ngModel)] keeps searchTerm in sync with what you type
+             (input) calls loadProducts() on every keystroke -->
+        <input
+          type="text"
+          placeholder="Search by name or SKU..."
+          [(ngModel)]="searchTerm"
+          (input)="loadProducts()"
+        />
+        <button class="btn-primary" (click)="openAddModal()">+ Add Product</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>SKU</th><th>Category</th><th>Quantity</th>
+            <th>Threshold</th><th>Price (₹)</th><th>Status</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <!-- Empty state -->
+          <tr *ngIf="products.length === 0" class="empty-row">
+            <td colspan="8">No products found.</td>
+          </tr>
+
+          <!-- *ngFor creates one <tr> for each product in the array -->
+          <tr *ngFor="let p of products">
+            <td>{{ p.name }}</td>
+            <td>{{ p.sku }}</td>
+            <td>{{ p.category }}</td>
+            <td>{{ p.quantity }}</td>
+            <td>{{ p.threshold }}</td>
+            <!-- | number:'1.0-0' is an Angular pipe that adds comma formatting -->
+            <td>₹{{ p.price | number:'1.0-0' }}</td>
+            <td>
+              <!-- [ngClass] sets the badge colour by calling badgeClass() in app.ts -->
+              <span class="badge" [ngClass]="badgeClass(p.status)">{{ p.status }}</span>
+            </td>
+            <td>
+              <button class="btn-warning btn-small" (click)="openStockModal(p.id, p.name)">Stock</button>
+              <button class="btn-primary btn-small" (click)="openEditModal(p.id)">Edit</button>
+              <button class="btn-danger  btn-small" (click)="deleteProduct(p.id, p.name)">Delete</button>
+            </td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══ HISTORY TAB ══════════════════════════════════════════════ -->
+  <div class="tab-content" [class.active]="activeTab === 'history'">
+    <div class="card">
+      <div class="history-header">
+        <h2>Stock Movement History</h2>
+        <button class="btn-danger" (click)="clearHistory()">Clear History</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th><th>Product</th><th>Type</th>
+            <th>Qty Changed</th><th>Before</th><th>After</th><th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+
+          <tr *ngIf="history.length === 0" class="empty-row">
+            <td colspan="7">No stock movements yet.</td>
+          </tr>
+
+          <tr *ngFor="let h of history">
+            <!-- | date:'medium' formats the date string into a readable format -->
+            <td>{{ h.date | date:'medium' }}</td>
+            <td>{{ h.productName }}</td>
+            <td>
+              <span *ngIf="h.type === 'In'"  class="in-text">▲ In</span>
+              <span *ngIf="h.type === 'Out'" class="out-text">▼ Out</span>
+            </td>
+            <td>{{ h.quantity }}</td>
+            <td>{{ h.quantityBefore }}</td>
+            <td>{{ h.quantityAfter }}</td>
+            <td>{{ h.note || '—' }}</td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- end .page -->
+
+
+<!-- ══ MODAL: ADD / EDIT PRODUCT ═══════════════════════════════════
+     [class.open] shows the modal when showProductModal is true
+     [(ngModel)] binds each input directly to productForm fields
+════════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" [class.open]="showProductModal">
+  <div class="modal">
+
+    <h3>{{ isEditing ? 'Edit Product' : 'Add Product' }}</h3>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Product Name</label>
+        <input type="text" [(ngModel)]="productForm.name" placeholder="e.g. Arduino Uno" />
+      </div>
+      <div class="form-group">
+        <label>SKU</label>
+        <input type="text" [(ngModel)]="productForm.sku" placeholder="e.g. ARD-001" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Category</label>
+        <input type="text" [(ngModel)]="productForm.category" placeholder="e.g. Electronics" />
+      </div>
+      <div class="form-group">
+        <label>Price (₹)</label>
+        <input type="number" [(ngModel)]="productForm.price" placeholder="0" />
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Quantity</label>
+        <input type="number" [(ngModel)]="productForm.quantity" placeholder="0" />
+      </div>
+      <div class="form-group">
+        <label>Low Stock Threshold</label>
+        <input type="number" [(ngModel)]="productForm.threshold" placeholder="10" />
+      </div>
+    </div>
+
+    <div class="modal-buttons">
+      <button class="btn-ghost"   (click)="showProductModal = false">Cancel</button>
+      <button class="btn-primary" (click)="saveProduct()">Save</button>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ══ MODAL: STOCK UPDATE ══════════════════════════════════════════ -->
+<div class="modal-overlay" [class.open]="showStockModal">
+  <div class="modal">
+
+    <h3>Update Stock — {{ stockProductName }}</h3>
+
+    <div class="form-group">
+      <label>Type</label>
+      <select [(ngModel)]="stockForm.type">
+        <option value="In">Stock In (Add)</option>
+        <option value="Out">Stock Out (Remove)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Quantity</label>
+      <input type="number" [(ngModel)]="stockForm.quantity" min="1" />
+    </div>
+
+    <div class="form-group">
+      <label>Note (optional)</label>
+      <input type="text" [(ngModel)]="stockForm.note" placeholder="e.g. Received from supplier" />
+    </div>
+
+    <div class="modal-buttons">
+      <button class="btn-ghost"   (click)="showStockModal = false">Cancel</button>
+      <button class="btn-success" (click)="saveStock()">Confirm</button>
+    </div>
+
+  </div>
+</div>

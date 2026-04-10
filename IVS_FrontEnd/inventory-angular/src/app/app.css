@@ -1,0 +1,15 @@
+/* app.css
+   Component-scoped styles for the root component.
+   These only apply inside app.html — Angular scopes them automatically.
+   All shared/global styles live in src/styles.css
+*/
+
+/* Ensure app root is visible and takes up available space */
+:host {
+  display: contents;
+}
+
+/* Small spacing between the three action buttons in each table row */
+td button + button {
+  margin-left: 4px;
+}
